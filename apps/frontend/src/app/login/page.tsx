@@ -1,11 +1,18 @@
-import LoginForm from "@/components/auth/LoginForm"
+import { GalleryVerticalEnd } from "lucide-react"
+
+import  {LoginForm}  from "@/components/auth/LoginForm"
 import { AuthProvider } from "@/components/contexts/AuthContext"
 
-export default function Signup() {
-     return <div>
+export default function LoginPage() {
+  return (
+    <div className="bg-muted flex min-h-svh flex-col items-center justify-center gap-6 p-6 md:p-10">
+      <div className="flex w-full max-w-sm flex-col gap-6">
+        
         <AuthProvider>
-             <LoginForm/>
+           <LoginForm />
         </AuthProvider>
-         
-     </div>
+       
+      </div>
+    </div>
+  )
 }
