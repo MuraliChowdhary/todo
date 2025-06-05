@@ -1,52 +1,82 @@
-// apps/frontend/src/app/api/auth/login/route.ts
+// src/app/api/auth/login/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+import { comparePassword, generateToken } from '@/lib/auth'
+import { loginSchema } from '@/lib/validation'
 
-import { PrismaClient } from '../../../../generated/prisma';
-import bcrypt from 'bcryptjs';
-import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-
-const prisma = new PrismaClient();
-
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const { email, password } = await request.json();
+    const body = await request.json()
+    
+    // Validate input
+    const validatedData = loginSchema.parse(body)
+    
+    // Find user
+    const user = await prisma.user.findUnique({
+      where: { email: validatedData.email }
+    })
 
-    if (!email || !password) {
-      // Always return JSON if frontend expects it
-      return NextResponse.json({ message: 'Please provide both email and password' }, { status: 400 });
-    }
-
-    const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
-      // Always return JSON if frontend expects it
-      return NextResponse.json({ message: 'Invalid credentials' }, { status: 401 });
+      return NextResponse.json(
+        { error: 'Invalid email or password' },
+        { status: 401 }
+      )
     }
 
-    const passwordMatch = await bcrypt.compare(password, user.password);
-    if (!passwordMatch) {
-      // Always return JSON if frontend expects it
-      return NextResponse.json({ message: 'Invalid credentials' }, { status: 401 });
+    // Check password
+    const isPasswordValid = await comparePassword(validatedData.password, user.password)
+    
+    if (!isPasswordValid) {
+      return NextResponse.json(
+        { error: 'Invalid email or password' },
+        { status: 401 }
+      )
     }
 
-    // Set cookie using Next.js cookies utility
-    (await
-      // Set cookie using Next.js cookies utility
-      cookies()).set('userId', user.id.toString(), {
-      httpOnly: true,
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: '/',
-      // secure: process.env.NODE_ENV === 'production', // Add this for production
-      // sameSite: 'lax', // Add this for production
-    });
+    // Update last login
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() }
+    })
 
-    return NextResponse.json({ message: 'Login successful', userId: user.id }, { status: 200 });
+    // Generate JWT token
+    const token = generateToken({
+      userId: user.id,
+      email: user.email,
+      username: user.username || undefined,
+    })
 
-  } catch (error: any) {
-    console.error('Login error (backend):', error); // Log the actual backend error for debugging
-    // Always return JSON, even for a 500 error
-    return NextResponse.json({ message: 'Something went wrong on the server.' }, { status: 500 });
-  } finally {
-    // Ensure disconnect happens even if an error occurs
-    await prisma.$disconnect();
+    const userResponse = {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      name: user.name,
+      avatar: user.avatar,
+      theme: user.theme,
+      timezone: user.timezone,
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt,
+    }
+
+    return NextResponse.json({
+      message: 'Login successful',
+      user: userResponse,
+      token,
+    })
+
+  } catch (error: unknown) {
+    console.error('Login error:', error)
+    
+    if (error instanceof Error && error.name === 'ZodError') {
+      return NextResponse.json(
+        { error: 'Validation failed', details: error.errors },
+        { status: 400 }
+      )
+    }
+
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    )
   }
 }

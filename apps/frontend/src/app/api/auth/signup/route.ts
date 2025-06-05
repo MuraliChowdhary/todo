@@ -1,38 +1,83 @@
-import { PrismaClient } from '../../../../generated/prisma';
-import bcrypt from 'bcryptjs';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+import { hashPassword, generateToken } from '@/lib/auth'
+import { signupSchema } from '@/lib/validation'
 
-const prisma = new PrismaClient();
-
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const { email, password } = await request.json();
+    const body = await request.json()
+    
+    // Validate input
+    const validatedData = signupSchema.parse(body)
+    
+    // Check if user already exists
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: validatedData.email },
+          ...(validatedData.username ? [{ username: validatedData.username }] : [])
+        ]
+      }
+    })
 
-    if (!email || !password) {
-      return new NextResponse('Please provide both email and password', { status: 400 });
-    }
-
-    const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
-      return new NextResponse('User with this email already exists', { status: 409 });
+      return NextResponse.json(
+        { error: 'User with this email or username already exists' },
+        { status: 400 }
+      )
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // Hash password
+    const hashedPassword = await hashPassword(validatedData.password)
 
-    const newUser = await prisma.user.create({
+    // Create user
+    const user = await prisma.user.create({
       data: {
-        email,
+        email: validatedData.email,
         password: hashedPassword,
+        username: validatedData.username,
+        name: validatedData.name,
       },
-    });
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        name: true,
+        avatar: true,
+        theme: true,
+        timezone: true,
+        createdAt: true,
+      }
+    })
 
-    // You might want to create a session or return a token here in a real app
-    return NextResponse.json({ message: 'User created successfully' }, { status: 201 });
+    // Generate JWT token
+    const token = generateToken({
+      userId: user.id,
+      email: user.email,
+      username: user.username || undefined,
+    })
+
+    return NextResponse.json({
+      message: 'User created successfully',
+      user,
+      token,
+    }, { status: 201 })
 
   } catch (error: any) {
-    console.error('Signup error:', error);
-    return new NextResponse('Something went wrong', { status: 500 });
-  } finally {
-    await prisma.$disconnect();
+    console.error('Signup error:', error)
+    
+    if (error.name === 'ZodError') {
+      return NextResponse.json(
+        { error: 'Validation failed', details: error.errors },
+        { status: 400 }
+      )
+    }
+
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    )
   }
 }
+
+ 

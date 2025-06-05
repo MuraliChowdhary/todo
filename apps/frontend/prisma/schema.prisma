@@ -8,34 +8,490 @@ generator client {
   provider = "prisma-client-js"
   output   = "../src/generated/prisma"
 }
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
 
+ 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-
+// ================================
+// USER MANAGEMENT
+// ================================
 
 model User {
-  id        Int      @id @default(autoincrement())
+  id        String   @id @default(cuid())
   email     String   @unique
+  username  String?  @unique
+  name      String?
+  avatar    String?
   password  String
-  tasks     Task[]
+  
+  // User preferences
+  theme         String   @default("light") // light, dark, system
+  timezone      String   @default("UTC")
+  dateFormat    String   @default("MM/DD/YYYY")
+  weekStartsOn  Int      @default(0) // 0 = Sunday, 1 = Monday
+  
+  // Notification preferences
+  emailNotifications    Boolean @default(true)
+  pushNotifications     Boolean @default(true)
+  reminderNotifications Boolean @default(true)
+  
+  // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  lastLoginAt DateTime?
+  
+  // Relations
+  workspaces        WorkspaceMember[]
+  ownedWorkspaces   Workspace[]
+  tasks             Task[]
+  comments          Comment[]
+  timeEntries       TimeEntry[]
+  notifications     Notification[]
+  automationRules   AutomationRule[]
+  savedFilters      SavedFilter[]
+  assignedTasks     Task[]    @relation("TaskAssignee")
+  Accounts          Account[]
+  sessions          Session[]
+  @@map("users")
 }
 
-model Task {
-  id          Int       @id @default(autoincrement())
+// ================================
+// WORKSPACE & PROJECT MANAGEMENT
+// ================================
+
+model Workspace {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  color       String? @default("#3B82F6")
+  icon        String?
+  
+  // Settings
+  isPublic    Boolean @default(false)
+  allowGuests Boolean @default(false)
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  ownerId   String
+  owner     User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members   WorkspaceMember[]
+  projects  Project[]
+  tags      Tag[]
+  
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id   String @id @default(cuid())
+  role String @default("member") // owner, admin, member, viewer
+  
+  // Timestamps
+  joinedAt DateTime @default(now())
+  
+  // Relations
+  userId      String
+  workspaceId String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, workspaceId])
+  @@map("workspace_members")
+}
+
+model Project {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  color       String? @default("#10B981")
+  icon        String?
+  
+  // Project settings
+  status      String   @default("active") // active, archived, completed
+  startDate   DateTime?
+  endDate     DateTime?
+  isTemplate  Boolean  @default(false)
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks       Task[]
+  milestones  Milestone[]
+  
+  @@map("projects")
+}
+
+model Milestone {
+  id          String    @id @default(cuid())
   title       String
   description String?
-  priority    String    @default("Medium") // e.g., "High", "Medium", "Low"
   dueDate     DateTime?
-  status      String    @default("Pending") // "Pending", "Ongoing", "Completed", "Overdue"
-  tags        String[]
-  userId      Int
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  // Add fields for image upload later
+  status      String    @default("pending") // pending, completed, overdue
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks     Task[]
+  
+  @@map("milestones")
+}
+
+// ================================
+// TASK MANAGEMENT
+// ================================
+
+model Task {
+  id          String  @id @default(cuid())
+  title       String
+  description String?
+  
+  // Task properties
+  status      String   @default("todo") // todo, in_progress, in_review, done, canceled, backlog
+  priority    String   @default("medium") // low, medium, high, critical
+  
+  // Dates and time
+  startDate   DateTime?
+  dueDate     DateTime?
+  completedAt DateTime?
+  
+  // Estimates and tracking
+  estimatedHours Float?
+  actualHours    Float?
+  
+  // Position for ordering
+  position Float @default(0)
+  
+  // Flags
+  isTemplate Boolean @default(false)
+  isRecurring Boolean @default(false)
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  creatorId   String
+  assigneeId  String?
+  projectId   String?
+  milestoneId String?
+  parentId    String? // For subtasks
+  
+  creator    User       @relation(fields: [creatorId], references: [id])
+  assignee   User?      @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  project    Project?   @relation(fields: [projectId], references: [id])
+  milestone  Milestone? @relation(fields: [milestoneId], references: [id])
+  parent     Task?      @relation("TaskHierarchy", fields: [parentId], references: [id])
+  subtasks   Task[]     @relation("TaskHierarchy")
+  
+  // Many-to-many relations
+  tags         TaskTag[]
+  attachments  Attachment[]
+  comments     Comment[]
+  timeEntries  TimeEntry[]
+  dependencies TaskDependency[] @relation("DependentTask")
+  dependents   TaskDependency[] @relation("BlockingTask")
+  
+  @@map("tasks")
+}
+
+model TaskDependency {
+  id String @id @default(cuid())
+  
+  // Relations
+  dependentTaskId String // Task that depends on another
+  blockingTaskId  String // Task that blocks the dependent task
+  
+  dependentTask Task @relation("DependentTask", fields: [dependentTaskId], references: [id], onDelete: Cascade)
+  blockingTask  Task @relation("BlockingTask", fields: [blockingTaskId], references: [id], onDelete: Cascade)
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  
+  @@unique([dependentTaskId, blockingTaskId])
+  @@map("task_dependencies")
+}
+
+// ================================
+// TAGGING SYSTEM
+// ================================
+
+model Tag {
+  id          String  @id @default(cuid())
+  name        String
+  color       String  @default("#6B7280")
+  description String?
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks       TaskTag[]
+  
+  @@unique([name, workspaceId])
+  @@map("tags")
+}
+
+model TaskTag {
+  taskId String
+  tagId  String
+  
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  
+  @@id([taskId, tagId])
+  @@map("task_tags")
+}
+
+// ================================
+// ATTACHMENTS & FILES
+// ================================
+
+model Attachment {
+  id       String @id @default(cuid())
+  filename String
+  originalName String
+  mimeType String
+  size     Int
+  url      String
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  
+  // Relations
+  taskId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  @@map("attachments")
+}
+
+// ================================
+// COMMENTS & ACTIVITY
+// ================================
+
+model Comment {
+  id      String @id @default(cuid())
+  content String
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  authorId String
+  taskId   String
+  
+  author User @relation(fields: [authorId], references: [id])
+  task   Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  @@map("comments")
+}
+
+// ================================
+// TIME TRACKING
+// ================================
+
+model TimeEntry {
+  id          String    @id @default(cuid())
+  description String?
+  startTime   DateTime
+  endTime     DateTime?
+  duration    Int? // in seconds
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  userId String
+  taskId String
+  
+  user User @relation(fields: [userId], references: [id])
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  @@map("time_entries")
+}
+
+// ================================
+// NOTIFICATIONS
+// ================================
+
+model Notification {
+  id      String  @id @default(cuid())
+  title   String
+  message String?
+  type    String  @default("info") // info, success, warning, error
+  
+  // Notification properties
+  isRead     Boolean @default(false)
+  actionUrl  String?
+  actionText String?
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  readAt    DateTime?
+  
+  // Relations
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("notifications")
+}
+
+// ================================
+// AUTOMATION & WORKFLOWS
+// ================================
+
+model AutomationRule {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  
+  // Rule configuration
+  trigger     Json // Trigger conditions
+  actions     Json // Actions to perform
+  isActive    Boolean @default(true)
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  creatorId String
+  creator   User   @relation(fields: [creatorId], references: [id])
+  
+  @@map("automation_rules")
+}
+
+// ================================
+// FILTERS & VIEWS
+// ================================
+
+model SavedFilter {
+  id          String @id @default(cuid())
+  name        String
+  description String?
+  
+  // Filter configuration
+  filters Json // Filter criteria
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("saved_filters")
+}
+
+// ================================
+// RECURRING TASKS
+// ================================
+
+model RecurringTaskTemplate {
+  id          String @id @default(cuid())
+  title       String
+  description String?
+  
+  // Task properties
+  priority    String @default("medium")
+  
+  // Recurrence settings
+  recurrencePattern Json // Pattern for recurrence (daily, weekly, monthly, etc.)
+  nextDueDate       DateTime?
+  isActive          Boolean @default(true)
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  creatorId String
+  projectId String?
+  
+  @@map("recurring_task_templates")
+}
+
+// ================================
+// ANALYTICS & REPORTING
+// ================================
+
+model ProductivityMetric {
+  id     String @id @default(cuid())
+  userId String
+  date   DateTime @db.Date
+  
+  // Metrics
+  tasksCompleted    Int @default(0)
+  tasksCreated      Int @default(0)
+  hoursWorked      Float @default(0)
+  focusTime        Float @default(0) // Time spent on high-priority tasks
+  
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@unique([userId, date])
+  @@map("productivity_metrics")
+}
+
+
+
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verificationtokens")
 }

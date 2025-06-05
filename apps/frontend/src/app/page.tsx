@@ -1,6 +1,4 @@
-import { ModeToggle } from "@/components/themeMode"
-import { SonnerDemo } from "../components/ToastMessage";
-import { Toaster } from "sonner";
+
 import HomePage from "@/components/HomePage";
  
   
